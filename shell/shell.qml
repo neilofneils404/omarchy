@@ -57,9 +57,7 @@ ShellRoot {
 
   property var defaultsConfig: builtinShellConfig
   property var shellConfig: builtinShellConfig
-  property bool pluginReloading: false
-  property bool pluginReloadPending: false
-
+  property var hyprlandPluginState: ({ enabled: [] })
   Timer {
     id: localPluginReloadTimer
     interval: 150
@@ -252,7 +250,7 @@ ShellRoot {
   Loader {
     id: pluginBarLoader
 
-    active: !shell.pluginReloading && shell.activeBarId !== shell.defaultBarId && shell.activeBarSourceUrl !== ""
+    active: shell.activeBarId !== shell.defaultBarId && shell.activeBarSourceUrl !== ""
     source: shell.activeBarId !== shell.defaultBarId ? shell.activeBarSourceUrl : ""
     asynchronous: true
     onLoaded: shell.configureBar(item, shell.activeBarManifest)
@@ -1013,39 +1011,11 @@ ShellRoot {
     }
   }
 
-  function serviceKeepLoaded(pluginId) {
-    var plugins = pluginRegistry && pluginRegistry.installedPlugins
-    var manifest = plugins ? plugins[pluginId] : null
-    return !!(manifest && manifest.keepLoaded === true)
-  }
-
-  // keepLoaded services (lock, idle, polkit) must survive plugin hot-reload.
-  // Destroying omarchy.lock drops the ext-session-lock client while Hyprland
-  // still holds the lock, which surfaces the crashed-lockscreen fallback.
-  function unloadPluginServices() {
-    var next = ({})
-    for (var existingId in _services) {
-      if (serviceKeepLoaded(existingId)) {
-        next[existingId] = _services[existingId]
-        continue
-      }
-      var inst = _services[existingId]
-      if (inst && typeof inst.destroy === "function") inst.destroy()
-    }
-    _services = next
-    var authenticationIds = AuthServiceStore.ids()
-    for (var ai = 0; ai < authenticationIds.length; ai++) {
-      var authenticationId = authenticationIds[ai]
-      if (!serviceKeepLoaded(authenticationId))
-        AuthServiceStore.destroy(authenticationId)
-    }
-  }
-
   Connections {
     target: shell.pluginRegistry
     function onPluginsChanged() {
       shell.syncPluginApis()
-      if (!shell.pluginReloading) shell._syncServices()
+      shell._syncServices()
     }
   }
 
@@ -1234,14 +1204,6 @@ ShellRoot {
     panelLoaders = next
   }
 
-  function unloadPanels() {
-    for (var id in panelLoaders) hide(id)
-    panelEntryModel.clear()
-    panelLoaders = ({})
-    pendingPayloads = ({})
-    openPanelIds = ({})
-  }
-
   function deliverIfLoaded(pluginId) {
     var loader = panelLoaders[pluginId]
     if (!loader || !loader.item) return
@@ -1290,8 +1252,8 @@ ShellRoot {
   // a fresh array instead rebuilt every panel on every plugin change, four
   // times over during startup: each rebuild started a new asynchronous load of
   // every keepLoaded panel while the last was in flight, so two OSDs could run
-  // at once, each registering its IPC handler. A full plugin reload clears
-  // the model in unloadPanels, so panels still rebuild from fresh code then.
+  // at once, each registering its IPC handler. A full plugin reload starts a
+  // new Quickshell generation, so panels still rebuild from fresh code then.
   ListModel { id: panelEntryModel }
 
   function syncPanelEntries() {
@@ -1344,7 +1306,7 @@ ShellRoot {
 
   Connections {
     target: shell.pluginRegistry
-    function onPluginsChanged() { if (!shell.pluginReloading) shell.syncPanelEntries() }
+    function onPluginsChanged() { shell.syncPanelEntries() }
   }
 
   Instantiator {
@@ -1401,7 +1363,7 @@ ShellRoot {
   // widgets use the same first-party manifest contract as third-party widgets.
   Connections {
     target: shell.pluginRegistry
-    function onPluginsChanged() { if (!shell.pluginReloading) shell.syncPluginWidgets() }
+    function onPluginsChanged() { shell.syncPluginWidgets() }
   }
 
   property var pluginWidgetComponents: ({})
@@ -1472,31 +1434,8 @@ ShellRoot {
     }
   }
 
-  function unloadPluginWidgets() {
-    for (var id in pluginWidgetComponents) shell.barWidgetRegistry.unregister(id)
-    pluginWidgetComponents = ({})
-  }
-
   function reloadPlugins() {
-    if (shell.pluginReloading || shell.pluginRegistry.scanning) {
-      shell.pluginReloadPending = true
-      return
-    }
-    shell.pluginReloading = true
-    shell.unloadPanels()
-    shell.unloadPluginServices()
-    shell.unloadPluginWidgets()
-    Qt.callLater(shell.finishPluginReload)
-  }
-
-  function finishPluginReload() {
-    if (!shell.pluginReloading) return
-    if (shell.pluginRegistry.scanning) {
-      shell.pluginReloadPending = true
-      return
-    }
-    if (typeof Qt.clearComponentCache === "function") Qt.clearComponentCache()
-    shell.pluginRegistry.rescan()
+    Quickshell.reload(false)
   }
 
   Connections {
@@ -1506,13 +1445,6 @@ ShellRoot {
       localPluginReloadTimer.restart()
     }
     function onScanFinished() {
-      if (shell.pluginReloadPending) {
-        shell.pluginReloadPending = false
-        shell.pluginReloading = false
-        Qt.callLater(shell.reloadPlugins)
-        return
-      }
-      shell.pluginReloading = false
       shell._syncServices()
       shell.syncPanelEntries()
       shell.syncPluginWidgets()

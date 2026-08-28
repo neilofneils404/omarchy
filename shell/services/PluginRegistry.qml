@@ -25,6 +25,7 @@ QtObject {
   property int registryRevision: 0
   property bool scanning: false
   property string lastEnableError: ""
+  readonly property string localPluginWatcherPath: Quickshell.env("OMARCHY_PATH") + "/shell/scripts/watch-local-plugins"
 
   signal pluginsChanged()
   signal scanFinished()
@@ -661,21 +662,12 @@ QtObject {
   }
 
   property Process localPluginWatcher: Process {
-    command: [
-      "inotifywait",
-      "-m",
-      "-r",
-      "-q",
-      "-e",
-      "close_write,create,delete,move",
-      "--format",
-      "%w%f",
-      registry.pluginsDir
-    ]
+    command: [registry.localPluginWatcherPath, registry.pluginsDir]
     stdout: SplitParser {
       onRead: function(path) {
         var pluginId = registry.localPluginIdForPath(path)
         if (pluginId) registry.localPluginChanged(pluginId)
+        if (registry.localPluginRootChanged(path)) registry.restartLocalPluginWatcher()
       }
     }
     onExited: localPluginWatcherRestart.restart()
@@ -684,6 +676,11 @@ QtObject {
   property Timer localPluginWatcherRestart: Timer {
     interval: 1000
     onTriggered: localPluginWatcher.running = true
+  }
+
+  function restartLocalPluginWatcher() {
+    if (localPluginWatcher.running) localPluginWatcher.running = false
+    localPluginWatcherRestart.restart()
   }
 
   function rescan() {
@@ -737,6 +734,15 @@ QtObject {
 
     var slash = relative.indexOf("/")
     return slash === -1 ? relative : relative.slice(0, slash)
+  }
+
+  function localPluginRootChanged(filePath) {
+    var base = pluginsDir.replace(/\/$/, "") + "/"
+    var path = String(filePath || "").trim()
+    if (path.indexOf(base) !== 0) return false
+
+    var relative = path.slice(base.length)
+    return relative.length > 0 && relative.charAt(0) !== "." && relative.indexOf("/") === -1
   }
 
   Component.onCompleted: ensureUserDir()
