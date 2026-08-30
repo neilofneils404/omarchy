@@ -57,7 +57,6 @@ ShellRoot {
 
   property var defaultsConfig: builtinShellConfig
   property var shellConfig: builtinShellConfig
-  property var hyprlandPluginState: ({ enabled: [] })
   Timer {
     id: localPluginReloadTimer
     interval: 150
